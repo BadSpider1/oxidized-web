@@ -21,6 +21,87 @@ module Oxidized
         redirect url_for('/images/favicon.ico')
       end
 
+      # Server-side DataTables endpoint for the nodes listing page.
+      # Accepts standard DataTables server-side processing parameters so that
+      # only one page of data is fetched, filtered, and sorted per request
+      # instead of sending every node to the browser at once.
+      #
+      # Query parameters (sent automatically by DataTables):
+      #   draw             - request counter echoed back in the response
+      #   start            - index of the first record for this page
+      #   length           - number of records per page (-1 = all)
+      #   search[value]    - global search string
+      #   order[0][column] - index of the column to sort by (0-based)
+      #   order[0][dir]    - sort direction: "asc" or "desc"
+      #
+      # Returns JSON in the DataTables server-side format:
+      #   { draw, recordsTotal, recordsFiltered, data: [...] }
+      get '/nodes/datatables' do
+        content_type :json
+
+        draw       = params[:draw].to_i
+        start_idx  = params[:start].to_i
+        length     = params[:length].to_i
+        search_val = (params.dig('search', 'value') || params.dig(:search, :value)).to_s
+        order_col  = (params.dig('order', '0', 'column') || params.dig(:order, :'0', :column)).to_i
+        order_dir  = (params.dig('order', '0', 'dir')    || params.dig(:order, :'0', :dir) || 'asc').to_s
+
+        # Use the node list cache so that Nodes#list (which serialises every
+        # node while holding the global mutex) is not called on every AJAX
+        # request.  We merge rather than mutate so the cached hashes are never
+        # modified by concurrent requests.
+        all_nodes = node_list_cache.list.map do |node|
+          node.merge(
+            status: node[:last] ? node[:last][:status] : 'never',
+            time:   node[:last] ? node[:last][:end]    : 'never',
+            group:  node[:group] || 'default'
+          )
+        end
+
+        records_total = all_nodes.count
+
+        # Apply global search across the visible text columns
+        unless search_val.empty?
+          s = search_val.downcase
+          all_nodes = all_nodes.select do |node|
+            %i[name ip model group status].any? { |f| node[f].to_s.downcase.include?(s) }
+          end
+        end
+
+        records_filtered = all_nodes.count
+
+        # Sort – use numeric comparison for time columns, string for the rest
+        col_fields = %i[name ip model group status time mtime]
+        sort_field = col_fields[order_col] || :name
+        sorted = if %i[time mtime].include?(sort_field)
+                   all_nodes.sort_by { |node| node[sort_field].is_a?(Time) ? node[sort_field].to_i : 0 }
+                 else
+                   all_nodes.sort_by { |node| node[sort_field].to_s.downcase }
+                 end
+        sorted.reverse! if order_dir == 'desc'
+
+        # Paginate (length == -1 means "all records")
+        page_data = length == -1 ? sorted : (sorted.slice(start_idx, length) || [])
+
+        json(
+          draw:            draw,
+          recordsTotal:    records_total,
+          recordsFiltered: records_filtered,
+          data:            page_data.map do |node|
+            {
+              name:      node[:name].to_s,
+              full_name: (node[:full_name] || node[:name]).to_s,
+              ip:        node[:ip].to_s,
+              model:     node[:model].to_s,
+              group:     node[:group].to_s,
+              status:    node[:status].to_s,
+              time:      node[:time].is_a?(Time)  ? node[:time].to_i  : 0,
+              mtime:     node[:mtime].is_a?(Time) ? node[:mtime].to_i : 0
+            }
+          end
+        )
+      end
+
       # :filter can be "group" or "model"
       # URL: /nodes/group/<GroupName>[.json]
       # URL: /nodes/model/<ModelName>[.json]
@@ -51,15 +132,23 @@ module Oxidized
       end
 
       get '/nodes.?:format?' do
-        @data = nodes.list.map do |node|
-          node[:status] = 'never'
-          node[:time]   = 'never'
-          node[:group]  = 'default' unless node[:group]
-          if node[:last]
-            node[:status] = node[:last][:status]
-            node[:time]   = node[:last][:end]
+        if params[:format] == 'json'
+          # JSON consumers (scripts, API clients) still get the full list
+          @data = nodes.list.map do |node|
+            node[:status] = 'never'
+            node[:time]   = 'never'
+            node[:group]  = 'default' unless node[:group]
+            if node[:last]
+              node[:status] = node[:last][:status]
+              node[:time]   = node[:last][:end]
+            end
+            node
           end
-          node
+        else
+          # HTML view: use server-side DataTables so only one page of data is
+          # fetched per request.  The actual data is loaded via AJAX by the
+          # browser calling /nodes/datatables with DataTables parameters.
+          @server_side = true
         end
         out :nodes
       end
@@ -88,6 +177,8 @@ module Oxidized
       get '/reload.?:format?' do
         node = params[:node]
         node ? (nodes.load node) : nodes.load
+        # Discard the cached node list so the next request reflects the reload
+        node_list_cache.invalidate!
         @data = node ? "reloaded #{node}" : 'reloaded list of nodes'
         out
       end
@@ -244,6 +335,10 @@ module Oxidized
 
       def nodes
         settings.nodes
+      end
+
+      def node_list_cache
+        settings.node_list_cache
       end
 
       # checks if param ends with .json
