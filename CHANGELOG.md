@@ -6,10 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Server-side, paginated rendering for the group (`/nodes/group/…`), model
+  (`/nodes/model/…`) and stats (`/nodes/stats`) views, so large deployments no
+  longer load every host into the browser before falling back to pagination.
+- Show *why* a host is failing: hovering the "Last Status" indicator of a
+  failing node on the nodes table reveals the last error type and message
+  (e.g. `Net::SSH::AuthenticationFailed: Authentication failed`), read from the
+  node's `err_type` / `err_reason`.
 
 ### Changed
+- Config search reads node configurations concurrently, greatly reducing search
+  time on large repositories, and no longer holds the global nodes lock while
+  reading each configuration.
 
 ### Fixed
+- Restore the column-visibility toggle button on the server-side nodes table
+  (it was missing because the button was placed before DataTables had finished
+  its first AJAX draw).
+- Fix the node name link on the nodes table pointing to the non-existent
+  `/node/show/<group>/<node>` route; it now links to `/node/show/<node>`.
+- Config search no longer returns a 500 error on an invalid regular expression,
+  and a single node whose configuration cannot be read (missing, binary or an
+  unsupported output) no longer aborts the whole search.
+- Escape the filter name shown in the nodes heading, closing a reflected-XSS
+  hole reachable via a crafted `/nodes/<filter>/…` URL.
 
 
 ## [0.18.1 – 2026-01-19]
