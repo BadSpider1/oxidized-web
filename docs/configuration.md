@@ -23,6 +23,12 @@ You can set the following parameter:
 - `url_prefix`: Defines a URL prefix (default: no prefix)
 - `vhosts`: A list of virtual hosts to listen to. If not specified, it will
   respond to any virtual host.
+- `max_failures`: How many recent failures to keep and show per host on the
+  node detail page (default: `10`). See
+  [Host credentials and failure history](#host-credentials-and-failure-history).
+- `hide_credentials`: `true`/`false`: Hides the resolved username and password
+  on the node detail page and omits the password from its JSON representation
+  (default: `false`).
 
 ## Examples
 
@@ -88,3 +94,36 @@ extensions:
      - enable
      - password
 ```
+
+# Host credentials and failure history
+The node detail page (`/node/show/<node>`) shows, in addition to the serialized
+node metadata:
+
+- **Host credentials**: the username and password Oxidized resolved for the
+  host (from the node, group, model and global configuration). The password is
+  masked and revealed with a click, so it is not shown in the clear by default.
+- **Recent failures**: a short history of the last failed backup attempts, one
+  entry per connection method. Oxidized tries each configured input in turn
+  (for example SSH and then Telnet), and the core keeps only the *last* error;
+  `oxidized-web` records each attempt so a host that fails SSH and then Telnet
+  shows one entry for each, with the timestamp, protocol, error type and error
+  message. The history is kept in memory and resets when the node list is
+  reloaded or Oxidized restarts.
+
+The number of failures retained per host is controlled by `max_failures`
+(default `10`). To keep credentials out of the web UI and API entirely, set
+`hide_credentials: true`:
+
+```yaml
+extensions:
+  oxidized-web:
+    load: true
+    # keep up to 20 recent failures per host on the detail page
+    max_failures: 20
+    # do not expose the resolved username/password in the web UI or JSON
+    hide_credentials: true
+```
+
+> **Note**: `oxidized-web` has no authentication of its own. When credentials
+> are displayed, make sure the interface is only reachable by trusted operators
+> (bind it to localhost, or place it behind an authenticating reverse proxy).

@@ -2,8 +2,15 @@
 
 require 'json'
 require 'puma'
+require 'oxidized/web/node_failure_history'
 
 module Oxidized
+  # Record per-connection-method backup failures on the Node so the web UI can
+  # show a failure history (see Oxidized::API::NodeFailureHistory).  Applied
+  # here, at extension load time, when the core Node class is already defined.
+  # Module#prepend is idempotent, so re-requiring this file is harmless.
+  Node.prepend(API::NodeFailureHistory) if defined?(Node)
+
   module API
     # Thread-safe cache for Nodes#list.
     #
@@ -277,6 +284,9 @@ module Oxidized
         require 'oxidized/web/webapp'
         @configuration = self.class.parse_configuration(configuration)
 
+        # Size the per-node failure history shown on the node detail page.
+        NodeFailureHistory.max = @configuration[:max_failures]
+
         cache = NodeListCache.new(
           nodes,
           ttl: @configuration[:node_cache_ttl]
@@ -349,7 +359,9 @@ module Oxidized
           hide_node_vars: hide_node_vars,
           node_cache_ttl: (configuration.node_cache_ttl? || NodeListCache::DEFAULT_TTL).to_i,
           min_threads: (configuration.min_threads?    || DEFAULT_MIN_THREADS).to_i,
-          max_threads: (configuration.max_threads?    || DEFAULT_MAX_THREADS).to_i
+          max_threads: (configuration.max_threads?    || DEFAULT_MAX_THREADS).to_i,
+          max_failures: (configuration.max_failures? || NodeFailureHistory::DEFAULT_MAX).to_i,
+          hide_credentials: configuration.hide_credentials? || false
         }
       end
 
@@ -369,7 +381,9 @@ module Oxidized
           hide_node_vars: [],
           node_cache_ttl: NodeListCache::DEFAULT_TTL,
           min_threads: DEFAULT_MIN_THREADS,
-          max_threads: DEFAULT_MAX_THREADS
+          max_threads: DEFAULT_MAX_THREADS,
+          max_failures: NodeFailureHistory::DEFAULT_MAX,
+          hide_credentials: false
         }
       end
 

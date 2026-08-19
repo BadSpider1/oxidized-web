@@ -272,7 +272,16 @@ module Oxidized
 
       get '/node/show/:node' do
         node, @json = route_parse :node
-        @data = filter_node_vars(nodes.show(node))
+        @node_data        = filter_node_vars(nodes.show(node))
+        @hide_credentials = settings.configuration[:hide_credentials] ? true : false
+        live              = live_node(node)
+        @credentials      = node_credentials(live)
+        @failures         = node_failures(live)
+        # JSON consumers get everything in one document; the HTML view renders
+        # the credentials and failures in their own panels (see views/node.haml)
+        # and dumps @node_data (which never carries the password) as JSON.
+        credentials_for_json = @hide_credentials ? { hidden: true } : @credentials
+        @data = @node_data.merge(credentials: credentials_for_json, failures: @failures)
         out :node
       end
 
@@ -692,6 +701,56 @@ module Oxidized
         end
 
         data
+      end
+
+      # Locate the live Node object by name without taking the global nodes
+      # mutex (mirrors ErrorCache): the serialized data returned by Nodes#show
+      # does not carry the resolved credentials or the failure history, so the
+      # node detail view reads them off the live object.  Returns nil when the
+      # node is unknown.
+      def live_node(name)
+        return nil unless nodes.respond_to?(:to_a)
+
+        nodes.to_a.find { |n| n.respond_to?(:name) && n.name.to_s == name.to_s }
+      rescue StandardError => e
+        logger.warn "live_node lookup failed for #{name}: #{e.class}: #{e.message}"
+        nil
+      end
+
+      # Resolved host credentials for the node detail page.  The values come
+      # from Node#auth ({ username:, password: }) which Oxidized resolves from
+      # the node, group, model and global configuration.
+      def node_credentials(live)
+        auth = live.respond_to?(:auth) ? (live.auth || {}) : {}
+        {
+          username: auth[:username],
+          password: auth[:password]
+        }
+      end
+
+      # The recorded per-connection-method failures for a node, most recent
+      # first, shaped for display / JSON.  Empty when the node is unknown or
+      # nothing has failed yet.
+      def node_failures(live)
+        return [] unless live.respond_to?(:failure_history)
+
+        live.failure_history.reverse.map do |failure|
+          time = failure[:time]
+          {
+            time: time.is_a?(Time) ? time.to_i : nil,
+            input: failure[:input].to_s,
+            err_type: failure[:err_type].to_s,
+            err_reason: failure[:err_reason].to_s
+          }
+        end
+      end
+
+      # Format a Unix epoch (integer seconds, UTC) for the initial (pre-JS)
+      # render of a `.time` cell; oxidized.js converts it to local time.
+      def epoch_to_utc(epoch)
+        return 'never' if epoch.nil? || epoch.to_i.zero?
+
+        Time.at(epoch.to_i).utc.strftime('%Y-%m-%d %H:%M:%S (UTC)')
       end
     end
   end

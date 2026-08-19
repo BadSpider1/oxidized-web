@@ -31,6 +31,9 @@ describe Oxidized::API::WebApp do
   before do
     @nodes = mock('Oxidized::Nodes')
     app.set(:nodes, @nodes)
+    # /node/show now also looks up the live node object (for credentials and
+    # the failure history); none of these fixtures carry one.
+    @nodes.stubs(:to_a).returns([])
 
     @serialized_node = {
       name: "sw5",

@@ -2,7 +2,10 @@ require_relative 'spec_helper'
 
 # Keys added to every parsed configuration.  Individual test cases may
 # override them by including the key in their own :expected hash.
-WEB_CONFIG_DEFAULT_EXTRA = { node_cache_ttl: 10, min_threads: 1, max_threads: 8 }.freeze
+WEB_CONFIG_DEFAULT_EXTRA = {
+  node_cache_ttl: 10, min_threads: 1, max_threads: 8,
+  max_failures: 10, hide_credentials: false
+}.freeze
 
 describe Oxidized::API::Web do
   describe "#parse_legacy_configuration" do
@@ -102,6 +105,18 @@ describe Oxidized::API::Web do
                     vhosts: [], hide_node_vars: [],
                     node_cache_ttl: 30, min_threads: 2, max_threads: 16 },
         description: 'performance tuning values'
+      },
+      {
+        configuration: Asetus::ConfigStruct.new(
+          {
+            'max_failures' => 25,
+            'hide_credentials' => true
+          }
+        ),
+        expected: { addr: '127.0.0.1', port: 8888, uri_prefix: '/',
+                    vhosts: [], hide_node_vars: [],
+                    max_failures: 25, hide_credentials: true },
+        description: 'credentials and failure-history options'
       }
     ]
 

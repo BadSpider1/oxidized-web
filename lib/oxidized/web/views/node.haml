@@ -3,19 +3,98 @@
     %h4
       %a{href: url_for('/nodes')} nodes
       %span /
-      =@data[:name]
+      =@node_data[:name]
       &nbsp;
       %a.link-body-emphasis.link-underline-opacity-0{title: 'configuration',
-        href: url_for("/node/fetch/#{@data[:full_name]}")}
+        href: url_for("/node/fetch/#{@node_data[:full_name]}")}
         %i.bi.bi-cloud-download
       %a.link-body-emphasis.link-underline-opacity-0{title: 'versions',
-        href: url_for("/node/version?node_full=#{@data[:full_name]}")}
+        href: url_for("/node/version?node_full=#{@node_data[:full_name]}")}
         %i.bi.bi-stack
       %a.link-body-emphasis.link-underline-opacity-0{title: 'update',
-        href: url_for("/node/next/#{@data[:full_name]}")}
+        href: url_for("/node/next/#{@node_data[:full_name]}")}
         %i.bi.bi-repeat
+
+    -# Resolved host credentials (see webapp.rb #node_credentials)
+    .card.mb-3
+      .card-header
+        %i.bi.bi-key-fill
+        Host credentials
+      .card-body
+        - if @hide_credentials
+          %p.text-body-secondary.mb-0
+            Credentials display is disabled by the
+            %code hide_credentials
+            option.
+        - else
+          %dl.row.mb-0
+            %dt.col-sm-2 Username
+            %dd.col-sm-10
+              - if @credentials[:username].to_s.empty?
+                %span.text-body-secondary (not set)
+              - else
+                %code= @credentials[:username]
+            %dt.col-sm-2 Password
+            %dd.col-sm-10
+              - if @credentials[:password].to_s.empty?
+                %span.text-body-secondary (not set)
+              - else
+                %span.font-monospace#nodePassword{'data-password' => @credentials[:password]}
+                  ••••••••
+                %button.btn.btn-sm.btn-outline-secondary.ms-2#togglePassword{type: 'button'}
+                  %i.bi.bi-eye-fill
+                  Show
+
+    -# Per-connection-method failure history (see NodeFailureHistory)
+    .card.mb-3
+      .card-header
+        %i.bi.bi-exclamation-triangle-fill
+        Recent failures
+      .card-body.p-0
+        - if @failures.empty?
+          %p.text-body-secondary.m-3.mb-0 No recorded failures.
+        - else
+          .table-responsive
+            %table.table.table-sm.table-striped.mb-0
+              %thead
+                %tr
+                  %th Time
+                  %th Method
+                  %th Error
+                  %th Message
+              %tbody
+                - @failures.each do |failure|
+                  %tr
+                    %td.time{ epoch: failure[:time] }= epoch_to_utc(failure[:time])
+                    %td= failure[:input]
+                    %td
+                      - if failure[:err_type].empty?
+                        %span.text-body-secondary —
+                      - else
+                        %code= failure[:err_type]
+                    %td= failure[:err_reason]
+
+    -# Full serialized node (never carries the password)
     %pre.bg-body-tertiary.border.border-secondary-subtle.rounded
       %code
-        =JSON.pretty_generate(@data)
+        =JSON.pretty_generate(@node_data)
 
-
+:javascript
+  $(function() {
+    var $btn = $('#togglePassword');
+    var $pw  = $('#nodePassword');
+    if ($btn.length && $pw.length) {
+      $btn.on('click', function() {
+        if ($pw.data('shown')) {
+          $pw.text('••••••••');
+          $btn.html('<i class="bi bi-eye-fill"></i> Show');
+          $pw.data('shown', false);
+        } else {
+          /* attr() returns the raw stored string; text() escapes on insert */
+          $pw.text($pw.attr('data-password'));
+          $btn.html('<i class="bi bi-eye-slash-fill"></i> Hide');
+          $pw.data('shown', true);
+        }
+      });
+    }
+  });
