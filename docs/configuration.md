@@ -101,7 +101,10 @@ node metadata:
 
 - **Host credentials**: the username and password Oxidized resolved for the
   host (from the node, group, model and global configuration). The password is
-  masked and revealed with a click, so it is not shown in the clear by default.
+  masked in the UI and revealed with a click. Note that the mask is only
+  cosmetic — the password value is delivered in the page (and in the JSON
+  representation), so anyone who can load the page can read it. Use
+  `hide_credentials` to suppress it entirely.
 - **Recent failures**: a short history of the last failed backup attempts, one
   entry per connection method. Oxidized tries each configured input in turn
   (for example SSH and then Telnet), and the core keeps only the *last* error;

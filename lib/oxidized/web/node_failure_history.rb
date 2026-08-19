@@ -48,9 +48,9 @@ module Oxidized
         end
       end
 
-      # Set up the per-node history storage.  Runs before the core initializer
-      # body via +super+ so every Node – however it is constructed – gets the
-      # instance variables.
+      # Set up the per-node history storage after the core initializer has run
+      # (+super+ is called first), so every Node – however it is constructed –
+      # gets the instance variables.
       def initialize(*)
         super
         @failure_history = []
@@ -69,19 +69,32 @@ module Oxidized
         @failure_history_mutex.synchronize { @failure_history.dup }
       end
 
-      # Wrap the core's per-input backup attempt.  When the attempt does not
-      # succeed the core has just set +err_type+/+err_reason+ for *this* input,
-      # so record a failure entry tagged with the input's protocol before the
-      # next input in the sequence overwrites them.
+      # Wrap the core's per-input backup attempt.  When the attempt fails the
+      # core has usually just set +err_type+/+err_reason+ for *this* input, so
+      # record a failure entry tagged with the input's protocol before the next
+      # input in the sequence overwrites them.
+      #
+      # The core can, however, return false *without* setting a fresh error
+      # (e.g. +input.connect+ returns false via the +connect && get+
+      # short-circuit, or an unexpected crash with no crash directory
+      # configured returns early).  In that case the still-set error belongs to
+      # a *previous* input, so we must not attribute it to this one — we compare
+      # the error before and after the attempt and only record it when it
+      # actually changed.
       def run_input(input)
+        before_type   = err_type
+        before_reason = err_reason
         result = super
-        record_input_failure(input) unless result
+        unless result
+          changed = err_type != before_type || err_reason != before_reason
+          record_input_failure(input, changed ? err_type : nil, changed ? err_reason : nil)
+        end
         result
       end
 
       private
 
-      def record_input_failure(input)
+      def record_input_failure(input, type, reason)
         # Defensive: a Node built by a path that bypassed our prepended
         # #initialize would have no storage; never raise from the poller.
         return unless @failure_history_mutex
@@ -89,8 +102,8 @@ module Oxidized
         entry = {
           time: Time.now.utc,
           input: protocol_name(input),
-          err_type: err_type.to_s,
-          err_reason: err_reason.to_s
+          err_type: type.to_s,
+          err_reason: reason.to_s
         }.freeze
 
         @failure_history_mutex.synchronize do

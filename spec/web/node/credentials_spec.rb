@@ -102,6 +102,18 @@ describe 'Oxidized::API::WebApp /node/show credentials and failures' do
     _(data['failures'][0]['time']).must_equal Time.utc(2026, 8, 19, 10, 0, 1).to_i
   end
 
+  it 'finds the live node when the page is addressed by IP' do
+    ip_double = Struct.new(:name, :ip, :auth, :failure_history)
+                      .new('core-sw1', '10.0.0.1', { username: 'oxidized', password: 'byip!' }, [])
+    @nodes.stubs(:show).with('10.0.0.1').returns(@serialized)
+    @nodes.stubs(:to_a).returns([ip_double])
+
+    get '/node/show/10.0.0.1'
+
+    _(last_response.ok?).must_equal true
+    _(last_response.body).must_include 'data-password="byip!"'
+  end
+
   it 'gracefully handles an unknown live node (serialized data only)' do
     @nodes.stubs(:to_a).returns([])
 

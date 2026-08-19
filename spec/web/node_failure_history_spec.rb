@@ -23,16 +23,18 @@ class FakeFailNode
     @program = outcomes
   end
 
-  # mirrors the core Node#run_input name/return contract (true/false)
+  # mirrors the core Node#run_input name/return contract (true/false).  An
+  # outcome without a :type key fails *without* setting a fresh error, as the
+  # core does when #connect returns false or a crash cannot be written.
   def run_input(_input) # rubocop:disable Naming/PredicateMethod
     outcome = @program.shift || { ok: true }
-    if outcome[:ok]
-      true
-    else
+    return true if outcome[:ok]
+
+    if outcome.has_key?(:type)
       @err_type   = outcome[:type]
       @err_reason = outcome[:reason]
-      false
     end
+    false
   end
 end
 FakeFailNode.prepend(Oxidized::API::NodeFailureHistory)
@@ -68,6 +70,25 @@ describe Oxidized::API::NodeFailureHistory do
     _(history[1][:input]).must_equal 'Telnet'
     _(history[1][:err_type]).must_equal 'Errno::ECONNREFUSED'
     _(history[1][:err_reason]).must_equal 'Connection refused'
+  end
+
+  it 'does not attribute a previous input\'s error to an input that set none' do
+    node = FakeFailNode.new
+    node.program([
+                   { ok: false, type: 'Net::SSH::AuthenticationFailed', reason: 'Authentication failed' },
+                   { ok: false } # e.g. connect returned false: no fresh error was set
+                 ])
+
+    node.run_input(FakeProto::SSH.new)
+    node.run_input(FakeProto::Telnet.new)
+
+    history = node.failure_history
+    _(history.length).must_equal 2
+    # the Telnet attempt failed but recorded no error, so it must NOT carry the
+    # SSH error that is still set on the node
+    _(history[1][:input]).must_equal 'Telnet'
+    _(history[1][:err_type]).must_equal ''
+    _(history[1][:err_reason]).must_equal ''
   end
 
   it 'does not record successful attempts' do

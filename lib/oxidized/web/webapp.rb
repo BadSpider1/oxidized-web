@@ -703,17 +703,24 @@ module Oxidized
         data
       end
 
-      # Locate the live Node object by name without taking the global nodes
-      # mutex (mirrors ErrorCache): the serialized data returned by Nodes#show
-      # does not carry the resolved credentials or the failure history, so the
-      # node detail view reads them off the live object.  Returns nil when the
-      # node is unknown.
-      def live_node(name)
+      # Locate the live Node object without taking the global nodes mutex
+      # (mirrors ErrorCache): the serialized data returned by Nodes#show does
+      # not carry the resolved credentials or the failure history, so the node
+      # detail view reads them off the live object.  The identifier may be a
+      # node name or an IP address — the same as Nodes#find_index, which
+      # Nodes#show uses — so a page addressed by IP still finds its node.
+      # Returns nil when the node is unknown.
+      def live_node(identifier)
         return nil unless nodes.respond_to?(:to_a)
 
-        nodes.to_a.find { |n| n.respond_to?(:name) && n.name.to_s == name.to_s }
+        id = identifier.to_s
+        nodes.to_a.find do |n|
+          next false unless n.respond_to?(:name)
+
+          n.name.to_s == id || (n.respond_to?(:ip) && n.ip.to_s == id)
+        end
       rescue StandardError => e
-        logger.warn "live_node lookup failed for #{name}: #{e.class}: #{e.message}"
+        logger.warn "live_node lookup failed for #{identifier}: #{e.class}: #{e.message}"
         nil
       end
 
