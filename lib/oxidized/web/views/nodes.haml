@@ -4,8 +4,8 @@
       %a.link-body-emphasis.link-underline-opacity-0{href: url_for('/nodes')} nodes
       - if @filter_type
         \/
-        -# Haml runs with escape_html: false, so escape these explicitly (&=)
-        -# — both come straight from the request path.
+        -# Both come straight from the request path; &= forces HTML escaping
+        -# (redundant with the global escape_html: true, but explicit and safe).
         &= "#{@filter_type}:"
         %b&= @filter_value
       - else
@@ -157,8 +157,11 @@
           }
           return data;
         }},
-        /* 1 – IP */
-        { data: 'ip' },
+        /* 1 – IP (escaped: a node whose IP cannot be parsed falls back to the
+         *     node name in the core, which may contain user-controlled markup) */
+        { data: 'ip', render: function(data, type) {
+          return type === 'display' ? oxEscHtml(data) : data;
+        }},
         /* 2 – Model */
         { data: 'model', render: function(data, type, row) {
           if (type === 'display') {

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Show the resolved host credentials (username and password) and a history of
+  the last failed backup attempts on a node's detail page (`/node/show/<node>`).
+  Failures are recorded per connection method, so a host that fails SSH and then
+  Telnet shows one entry for each, with the timestamp, protocol, error type and
+  message. The password is masked in the UI with a click-to-reveal toggle, and
+  the whole credentials panel can be disabled with the `hide_credentials`
+  option.
 - Server-side, paginated rendering for the group (`/nodes/group/…`), model
   (`/nodes/model/…`) and stats (`/nodes/stats`) views, so large deployments no
   longer load every host into the browser before falling back to pagination.
@@ -13,11 +20,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   failing node on the nodes table reveals the last error type and message
   (e.g. `Net::SSH::AuthenticationFailed: Authentication failed`), read from the
   node's `err_type` / `err_reason`.
+- Security regression tests for XSS prevention in node name, version, diff, stats views and HTMLEntities encoding of device config content (@mattimustang, @robertcheramy)
 
 ### Changed
 - Config search reads node configurations concurrently, greatly reducing search
   time on large repositories, and no longer holds the global nodes lock while
   reading each configuration.
+- Remove the no longer needed escape_once helper call in node.haml, relying on HAML's global escape_html instead (@robertcheramy)
+- Update web libraries to the latest versions (@robertcheramy)
+- Encode JSON output with the standard library instead of Sinatra's json helper (@robertcheramy)
+- Set HAML's `attr_quote` explicitly to `"` for stable output across HAML versions (@robertcheramy)
 
 ### Fixed
 - Restore the column-visibility toggle button on the server-side nodes table
@@ -30,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unsupported output) no longer aborts the whole search.
 - Escape the filter name shown in the nodes heading, closing a reflected-XSS
   hole reachable via a crafted `/nodes/<filter>/…` URL.
+- Fix XSS vulnerability (CWE-79) by enabling HAML's escape_html globally; user-controlled values in node names, group names, model names, and URL parameters are now HTML-escaped in all templates (@mattimustang)
 
 
 ## [0.18.1 – 2026-01-19]

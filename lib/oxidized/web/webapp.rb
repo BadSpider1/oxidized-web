@@ -1,5 +1,4 @@
 require 'sinatra/base'
-require 'sinatra/json'
 require 'sinatra/url_for'
 require 'tilt/haml'
 require 'htmlentities'
@@ -11,7 +10,10 @@ module Oxidized
     class WebApp < Sinatra::Base
       helpers Sinatra::UrlForHelper
       set :public_folder, proc { File.join(root, 'public') }
-      set :haml, { escape_html: false }
+      # attr_quote: use double quotes for HTML attributes. Set explicitly so the
+      # output is stable across Haml versions. Haml 7.3.0 changed the default
+      # from "'" to '"' (haml/haml#1188); older versions still default to "'".
+      set :haml, { escape_html: true, attr_quote: '"' }
 
       get '/' do
         redirect url_for('/nodes')
@@ -92,7 +94,7 @@ module Oxidized
         # serialized list, so look it up separately and attach it to the page.
         errors = error_cache.map
 
-        json(
+        JSON.generate(
           draw: dt[:draw],
           recordsTotal: records_total,
           recordsFiltered: records_filtered,
@@ -137,7 +139,7 @@ module Oxidized
 
         page_data = dt[:length] == -1 ? sorted : (sorted.slice(dt[:start], dt[:length]) || [])
 
-        json(
+        JSON.generate(
           draw: dt[:draw],
           recordsTotal: records_total,
           recordsFiltered: records_filtered,
@@ -206,10 +208,11 @@ module Oxidized
           # Keep the top-level shape a JSON object keyed by node name (as the
           # previous implementation did) so existing consumers can still index
           # by node name; the per-node value is now a structured summary.
-          @data = stats_cache.rows.each_with_object({}) do |row, acc|
-            acc[row[:name].to_s] = serialize_stats_row(row)
+          content_type :json
+          @data = stats_cache.rows.to_h do |row|
+            [row[:name].to_s, serialize_stats_row(row)]
           end
-          json @data
+          JSON.generate(@data)
         else
           # HTML view: server-side DataTables, data loaded via AJAX from
           # /nodes/stats/datatables one page at a time.
@@ -371,10 +374,11 @@ module Oxidized
 
       def out(template = :text)
         if @json || (params[:format] == 'json')
+          content_type :json
           if @data.is_a?(String)
-            json @data.lines
+            JSON.generate(@data.lines)
           else
-            json @data
+            JSON.generate(@data)
           end
         elsif (template == :text) || (params[:format] == 'text')
           content_type :text
