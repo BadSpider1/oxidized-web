@@ -28,9 +28,22 @@ module Oxidized
     # {NodeFailureHistory.max} entries, newest last) and is not persisted, so
     # it resets when the node list is reloaded from the source or when Oxidized
     # restarts.
+    #
+    # Storage is created lazily (see {#failure_history_mutex}) rather than in a
+    # prepended +#initialize+ on purpose: the Oxidized core builds every Node
+    # (Nodes.new) *before* it requires oxidized-web and this module is
+    # prepended (see oxidized/core.rb).  A prepended initializer would therefore
+    # never run for those already-constructed nodes – exactly the nodes the
+    # worker polls – so their failures would never be recorded.  Lazy creation
+    # makes the feature work regardless of construction order.
     module NodeFailureHistory
       # Default number of failure entries retained per node.
       DEFAULT_MAX = 10
+
+      # Guards the one-time creation of each node's per-instance storage.  A
+      # single process-wide lock is fine: it is only contended the very first
+      # time a given node records or reads its history.
+      STORAGE_LOCK = Mutex.new
 
       class << self
         # Number of failure entries retained per node.  Configurable through
@@ -48,15 +61,6 @@ module Oxidized
         end
       end
 
-      # Set up the per-node history storage after the core initializer has run
-      # (+super+ is called first), so every Node – however it is constructed –
-      # gets the instance variables.
-      def initialize(*)
-        super
-        @failure_history = []
-        @failure_history_mutex = Mutex.new
-      end
-
       # A thread-safe snapshot of the recorded failures, oldest first.  Safe to
       # call from the web (Puma) thread while the poller thread records new
       # failures.
@@ -64,9 +68,7 @@ module Oxidized
       # @return [Array<Hash>] each entry is
       #   +{ time: Time, input: String, err_type: String, err_reason: String }+
       def failure_history
-        return [] unless @failure_history_mutex
-
-        @failure_history_mutex.synchronize { @failure_history.dup }
+        failure_history_mutex.synchronize { @failure_history.dup }
       end
 
       # Wrap the core's per-input backup attempt.  When the attempt fails the
@@ -94,11 +96,23 @@ module Oxidized
 
       private
 
-      def record_input_failure(input, type, reason)
-        # Defensive: a Node built by a path that bypassed our prepended
-        # #initialize would have no storage; never raise from the poller.
-        return unless @failure_history_mutex
+      # Lazily create (once) and return this node's history mutex.  Because the
+      # module may have been prepended after the node was constructed, the
+      # instance variables cannot be assumed to exist; create them under a
+      # process-wide lock the first time they are needed.  The array is assigned
+      # before the mutex so any thread that sees a non-nil mutex also sees the
+      # array.
+      def failure_history_mutex
+        existing = @failure_history_mutex
+        return existing if existing
 
+        NodeFailureHistory::STORAGE_LOCK.synchronize do
+          @failure_history ||= []
+          @failure_history_mutex ||= Mutex.new
+        end
+      end
+
+      def record_input_failure(input, type, reason)
         entry = {
           time: Time.now.utc,
           input: protocol_name(input),
@@ -106,7 +120,7 @@ module Oxidized
           err_reason: reason.to_s
         }.freeze
 
-        @failure_history_mutex.synchronize do
+        failure_history_mutex.synchronize do
           @failure_history.push(entry)
           @failure_history.shift while @failure_history.size > NodeFailureHistory.max
         end

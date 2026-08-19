@@ -49,6 +49,22 @@ describe Oxidized::API::NodeFailureHistory do
     _(Oxidized::Node.include?(Oxidized::API::NodeFailureHistory)).must_equal true
   end
 
+  it 'records failures even when the node was constructed before the module was prepended' do
+    # Regression: the Oxidized core builds every Node (Nodes.new) before it
+    # requires oxidized-web and prepends this module, so the poller's nodes
+    # never had a prepended #initialize run. Storage must be created lazily.
+    node = FakeFailNode.new
+    _(node.instance_variable_get(:@failure_history_mutex)).must_be_nil
+
+    node.program([{ ok: false, type: 'Errno::ECONNREFUSED', reason: 'Connection refused' }])
+    node.run_input(FakeProto::SSH.new)
+
+    history = node.failure_history
+    _(history.length).must_equal 1
+    _(history[0][:input]).must_equal 'SSH'
+    _(history[0][:err_type]).must_equal 'Errno::ECONNREFUSED'
+  end
+
   it 'records one entry per failed connection method, tagged with the protocol' do
     node = FakeFailNode.new
     node.program([
