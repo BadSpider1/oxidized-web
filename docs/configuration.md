@@ -110,8 +110,12 @@ node metadata:
   (for example SSH and then Telnet), and the core keeps only the *last* error;
   `oxidized-web` records each attempt so a host that fails SSH and then Telnet
   shows one entry for each, with the timestamp, protocol, error type and error
-  message. The history is kept in memory and resets when the node list is
-  reloaded or Oxidized restarts.
+  message. The history is built in memory from the first failed poll after the
+  extension has loaded and resets when the node list is reloaded or Oxidized
+  restarts. Until a host has failed with the extension running, the list falls
+  back to the single last error the core still holds for that host (with the
+  protocol filled in when the host has exactly one configured input), so a
+  currently-failing host always shows *why* rather than an empty list.
 
 The number of failures retained per host is controlled by `max_failures`
 (default `10`). To keep credentials out of the web UI and API entirely, set

@@ -736,12 +736,17 @@ module Oxidized
       end
 
       # The recorded per-connection-method failures for a node, most recent
-      # first, shaped for display / JSON.  Empty when the node is unknown or
-      # nothing has failed yet.
+      # first, shaped for display / JSON.
+      #
+      # The per-protocol history is only populated from the first failed poll
+      # after the web extension has loaded (it is in-memory and not persisted).
+      # So that a host which is *already* failing does not show an empty list,
+      # fall back to the single last error the core still holds on the node
+      # (err_type / err_reason) when no richer history has been recorded yet.
       def node_failures(live)
-        return [] unless live.respond_to?(:failure_history)
+        history = live.respond_to?(:failure_history) ? live.failure_history : []
 
-        live.failure_history.reverse.map do |failure|
+        entries = history.reverse.map do |failure|
           time = failure[:time]
           {
             time: time.is_a?(Time) ? time.to_i : nil,
@@ -750,6 +755,57 @@ module Oxidized
             err_reason: failure[:err_reason].to_s
           }
         end
+        return entries unless entries.empty?
+
+        fallback = last_error_entry(live)
+        fallback ? [fallback] : []
+      end
+
+      # Synthesize a single failure entry from the last error the core retained
+      # on the node (err_type / err_reason).  Used as a fallback when no
+      # per-protocol history has been recorded yet.  The core does not store
+      # when the error happened or which input produced it, so approximate the
+      # time with the last job's end time and only fill in the protocol when the
+      # node has exactly one configured input (so it is unambiguous).
+      def last_error_entry(live)
+        return nil unless live.respond_to?(:err_type)
+
+        type = live.err_type.to_s
+        return nil if type.empty?
+
+        {
+          time: last_run_epoch(live),
+          input: sole_input_protocol(live),
+          err_type: type,
+          err_reason: (live.respond_to?(:err_reason) ? live.err_reason.to_s : '')
+        }
+      end
+
+      # Epoch (seconds) of the node's last job end, or nil.
+      def last_run_epoch(live)
+        return nil unless live.respond_to?(:last)
+
+        last = live.last
+        return nil unless last.respond_to?(:end)
+
+        ending = last.end
+        ending.is_a?(Time) ? ending.to_i : nil
+      end
+
+      # The protocol label when the node has exactly one configured input
+      # (e.g. "SSH"); otherwise '' since we cannot know which input produced the
+      # retained error.
+      def sole_input_protocol(live)
+        return '' unless live.respond_to?(:input)
+
+        inputs = Array(live.input)
+        return '' unless inputs.size == 1
+
+        klass = inputs.first
+        klass = klass.class unless klass.is_a?(Module)
+        klass.name.to_s.split('::').last.to_s
+      rescue StandardError
+        ''
       end
 
       # Format a Unix epoch (integer seconds, UTC) for the initial (pre-JS)

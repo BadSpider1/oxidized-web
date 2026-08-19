@@ -10,9 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the last failed backup attempts on a node's detail page (`/node/show/<node>`).
   Failures are recorded per connection method, so a host that fails SSH and then
   Telnet shows one entry for each, with the timestamp, protocol, error type and
-  message. The password is masked in the UI with a click-to-reveal toggle, and
-  the whole credentials panel can be disabled with the `hide_credentials`
-  option.
+  message; a host that is already failing falls back to the last error the core
+  still holds so the list is never empty for a failing host. The password is
+  masked in the UI with a click-to-reveal toggle, and the whole credentials
+  panel can be disabled with the `hide_credentials` option.
 - Server-side, paginated rendering for the group (`/nodes/group/…`), model
   (`/nodes/model/…`) and stats (`/nodes/stats`) views, so large deployments no
   longer load every host into the browser before falling back to pagination.

@@ -6,6 +6,18 @@ require 'json'
 # carries neither the resolved credentials nor the failure history).
 LiveNodeDouble = Struct.new(:name, :auth, :failure_history)
 
+# A richer double that also carries the core's retained last error, the last
+# job, and the configured inputs — the fields node_failures falls back to when
+# no per-protocol history has been recorded yet.
+FailingNodeDouble = Struct.new(:name, :auth, :failure_history, :err_type, :err_reason, :last, :input)
+FailLastJob = Struct.new(:start, :end, :status, :time)
+
+# Named input stand-ins whose class basename is the protocol label.
+module CredInput
+  class SSH; end # rubocop:disable Lint/EmptyClass
+  class Telnet; end # rubocop:disable Lint/EmptyClass
+end
+
 describe 'Oxidized::API::WebApp /node/show credentials and failures' do
   include Rack::Test::Methods
 
@@ -124,6 +136,75 @@ describe 'Oxidized::API::WebApp /node/show credentials and failures' do
     _(body).must_include 'Host credentials'
     _(body).must_include '(not set)'
     _(body).must_include 'No recorded failures.'
+  end
+
+  describe 'last-error fallback when no per-protocol history is recorded yet' do
+    it 'shows the core-retained last error, with the sole configured input as the protocol' do
+      last = FailLastJob.new(nil, Time.utc(2026, 8, 19, 11, 43, 35), :no_connection, 40)
+      node = FailingNodeDouble.new('sw5', {}, [], 'Net::SSH::AuthenticationFailed',
+                                   'invalid credentials', last, [CredInput::SSH])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5'
+
+      body = last_response.body
+      _(body).wont_include 'No recorded failures.'
+      _(body).must_include 'Net::SSH::AuthenticationFailed'
+      _(body).must_include 'invalid credentials'
+      _(body).must_include 'SSH' # protocol derived from the single configured input
+    end
+
+    it 'omits the protocol when the node has more than one configured input' do
+      node = FailingNodeDouble.new('sw5', {}, [], 'Errno::ECONNREFUSED', 'Connection refused',
+                                   nil, [CredInput::SSH, CredInput::Telnet])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5'
+
+      body = last_response.body
+      _(body).must_include 'Errno::ECONNREFUSED'
+      # the protocol is unknown, so neither input name is shown
+      _(body).wont_include 'SSH'
+      _(body).wont_include 'Telnet'
+    end
+
+    it 'prefers recorded per-protocol history over the last-error fallback' do
+      recorded = [{ time: Time.utc(2026, 8, 19, 10, 0, 0), input: 'Telnet',
+                    err_type: 'Errno::ECONNREFUSED', err_reason: 'Connection refused' }]
+      node = FailingNodeDouble.new('sw5', {}, recorded, 'Net::SSH::AuthenticationFailed',
+                                   'auth', nil, [CredInput::SSH])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5'
+
+      body = last_response.body
+      _(body).must_include 'Errno::ECONNREFUSED' # the recorded entry
+      _(body).wont_include 'Net::SSH::AuthenticationFailed' # fallback not used
+    end
+
+    it 'includes the fallback error in the JSON representation' do
+      last = FailLastJob.new(nil, Time.utc(2026, 8, 19, 11, 43, 35), :no_connection, 40)
+      node = FailingNodeDouble.new('sw5', { username: 'admin', password: 'p' }, [],
+                                   'Net::SSH::AuthenticationFailed', 'boom', last, [CredInput::SSH])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5.json'
+
+      data = JSON.parse(last_response.body)
+      _(data['failures'].length).must_equal 1
+      _(data['failures'][0]['err_type']).must_equal 'Net::SSH::AuthenticationFailed'
+      _(data['failures'][0]['input']).must_equal 'SSH'
+      _(data['failures'][0]['time']).must_equal Time.utc(2026, 8, 19, 11, 43, 35).to_i
+    end
+
+    it 'shows no failures when the node is not currently failing and has no history' do
+      node = FailingNodeDouble.new('sw5', {}, [], '', '', nil, [CredInput::SSH])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5'
+
+      _(last_response.body).must_include 'No recorded failures.'
+    end
   end
 
   describe 'hide_credentials' do
