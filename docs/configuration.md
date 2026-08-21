@@ -104,7 +104,10 @@ node metadata:
   masked in the UI and revealed with a click. Note that the mask is only
   cosmetic — the password value is delivered in the page (and in the JSON
   representation), so anyone who can load the page can read it. Use
-  `hide_credentials` to suppress it entirely.
+  `hide_credentials` to suppress it entirely. The panel also lists the port for
+  each configured connection method (e.g. `SSH:22`, `Telnet:23`), resolved with
+  the same `ssh_port` / `telnet_port` / … variable lookup Oxidized uses at
+  connect time, so mapped ports set at any scope are shown.
 - **Recent failures**: a short history of the last failed backup attempts, one
   entry per connection method. Oxidized tries each configured input in turn
   (for example SSH and then Telnet), and the core keeps only the *last* error;

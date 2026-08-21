@@ -277,11 +277,16 @@ module Oxidized
         live              = live_node(node)
         @credentials      = node_credentials(live)
         @failures         = node_failures(live)
+        @ports            = node_ports(live)
         # JSON consumers get everything in one document; the HTML view renders
         # the credentials and failures in their own panels (see views/node.haml)
         # and dumps @node_data (which never carries the password) as JSON.
         credentials_for_json = @hide_credentials ? { hidden: true } : @credentials
-        @data = @node_data.merge(credentials: credentials_for_json, failures: @failures)
+        @data = @node_data.merge(
+          credentials: credentials_for_json,
+          ports: @ports,
+          failures: @failures
+        )
         out :node
       end
 
@@ -378,6 +383,16 @@ module Oxidized
       # during a config search.  Reading a config is I/O bound (git/disk), so
       # several threads dramatically cut the wall-clock time on large repos.
       CONF_SEARCH_THREADS = 16
+
+      # Maps an input protocol (class basename, downcased) to the var that holds
+      # its port and the protocol's default port.  Used to show mapped ports on
+      # the node detail page (see #node_ports).
+      PROTOCOL_PORT_VARS = {
+        'ssh' => [:ssh_port, 22],
+        'scp' => [:ssh_port, 22],
+        'telnet' => [:telnet_port, 23],
+        'ftp' => [:ftp_port, 21]
+      }.freeze
 
       private
 
@@ -735,6 +750,64 @@ module Oxidized
         }
       end
 
+      # Ports the node will use for each configured connection method, resolved
+      # with the same node/group/model/global var lookup Oxidized applies at
+      # connect time, so mapped ports configured anywhere are reflected.
+      #
+      # @return [Array<Hash>] one entry per configured input:
+      #   +{ protocol: "SSH", port: 22 }+.  +port+ is nil for a protocol whose
+      #   port is not a simple configurable value (e.g. HTTP).
+      def node_ports(live)
+        return [] unless live.respond_to?(:input)
+
+        inputs = Array(live.input)
+        return [] if inputs.empty?
+
+        resolver = var_resolver(live)
+        inputs.filter_map do |klass|
+          proto = protocol_label(klass)
+          next nil if proto.empty?
+
+          mapping = PROTOCOL_PORT_VARS[proto.downcase]
+          port = nil
+          if mapping
+            var, default = mapping
+            resolved = resolver && resolve_var(resolver, var)
+            port = (resolved || default).to_i
+          end
+          { protocol: proto, port: port }
+        end
+      end
+
+      # Class basename of an input (class or instance), e.g. "SSH", "Telnet".
+      def protocol_label(klass)
+        klass = klass.class unless klass.is_a?(Module)
+        klass.name.to_s.split('::').last.to_s
+      rescue StandardError
+        ''
+      end
+
+      # Build an object that resolves node/group/model/global vars exactly like
+      # the Oxidized core (Oxidized::Config::Vars), so a port mapped at any
+      # scope is read from where it is actually configured.  Returns nil when
+      # the core module or a usable node is not available.
+      def var_resolver(live)
+        return nil unless live && defined?(Oxidized::Config::Vars)
+
+        resolver = Object.new
+        resolver.extend(Oxidized::Config::Vars)
+        resolver.instance_variable_set(:@node, live)
+        resolver
+      rescue StandardError
+        nil
+      end
+
+      def resolve_var(resolver, name)
+        resolver.vars(name)
+      rescue StandardError
+        nil
+      end
+
       # The recorded per-connection-method failures for a node, most recent
       # first, shaped for display / JSON.
       #
@@ -761,23 +834,44 @@ module Oxidized
         fallback ? [fallback] : []
       end
 
-      # Synthesize a single failure entry from the last error the core retained
-      # on the node (err_type / err_reason).  Used as a fallback when no
-      # per-protocol history has been recorded yet.  The core does not store
-      # when the error happened or which input produced it, so approximate the
-      # time with the last job's end time and only fill in the protocol when the
-      # node has exactly one configured input (so it is unambiguous).
+      # Synthesize a single failure entry when no per-protocol history has been
+      # recorded yet, so a host that is *already* failing never shows an empty
+      # list.  Prefer the error the core still holds (err_type / err_reason);
+      # if even that is gone (the core clears it when it rebuilds nodes on a
+      # reload, keeping only the last job), fall back to the last job's failing
+      # status so the operator still sees that — and roughly when — it failed.
+      # The core stores neither when the error happened nor which input produced
+      # it, so approximate the time with the last job's end and only name the
+      # protocol when the node has exactly one configured input.
       def last_error_entry(live)
-        return nil unless live.respond_to?(:err_type)
+        type = live.respond_to?(:err_type) ? live.err_type.to_s : ''
 
-        type = live.err_type.to_s
-        return nil if type.empty?
+        return last_status_entry(live) if type.empty?
 
         {
           time: last_run_epoch(live),
           input: sole_input_protocol(live),
           err_type: type,
           err_reason: (live.respond_to?(:err_reason) ? live.err_reason.to_s : '')
+        }
+      end
+
+      # Fallback entry built from the last job's status alone, used when the
+      # node carries no retained error but its last backup did not succeed.
+      def last_status_entry(live)
+        return nil unless live.respond_to?(:last)
+
+        last = live.last
+        return nil unless last.respond_to?(:status)
+
+        status = last.status.to_s
+        return nil if status.empty? || status == 'success'
+
+        {
+          time: last_run_epoch(live),
+          input: sole_input_protocol(live),
+          err_type: '',
+          err_reason: "last backup attempt failed (#{status})"
         }
       end
 

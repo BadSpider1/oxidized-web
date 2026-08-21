@@ -16,6 +16,7 @@ FailLastJob = Struct.new(:start, :end, :status, :time)
 module CredInput
   class SSH; end # rubocop:disable Lint/EmptyClass
   class Telnet; end # rubocop:disable Lint/EmptyClass
+  class Http; end # rubocop:disable Lint/EmptyClass
 end
 
 describe 'Oxidized::API::WebApp /node/show credentials and failures' do
@@ -23,6 +24,14 @@ describe 'Oxidized::API::WebApp /node/show credentials and failures' do
 
   def app
     Oxidized::API::WebApp
+  end
+
+  # The "Recent failures" table only (ports render as badges elsewhere, so
+  # protocol assertions about a failure row must be scoped to this section).
+  def failures_table(body)
+    start = body.index('Recent failures')
+    stop  = body.index('</table>', start.to_i)
+    stop ? body[start...stop] : body[start..]
   end
 
   before do
@@ -151,7 +160,9 @@ describe 'Oxidized::API::WebApp /node/show credentials and failures' do
       _(body).wont_include 'No recorded failures.'
       _(body).must_include 'Net::SSH::AuthenticationFailed'
       _(body).must_include 'invalid credentials'
-      _(body).must_include 'SSH' # protocol derived from the single configured input
+      # protocol derived from the single configured input (scope to the
+      # failures table so this is not satisfied by the ports badges)
+      _(failures_table(body)).must_include 'SSH'
     end
 
     it 'omits the protocol when the node has more than one configured input' do
@@ -161,11 +172,11 @@ describe 'Oxidized::API::WebApp /node/show credentials and failures' do
 
       get '/node/show/sw5'
 
-      body = last_response.body
-      _(body).must_include 'Errno::ECONNREFUSED'
-      # the protocol is unknown, so neither input name is shown
-      _(body).wont_include 'SSH'
-      _(body).wont_include 'Telnet'
+      failures = failures_table(last_response.body)
+      _(failures).must_include 'Errno::ECONNREFUSED'
+      # the protocol is unknown, so neither input name is shown in the failure row
+      _(failures).wont_include 'SSH'
+      _(failures).wont_include 'Telnet'
     end
 
     it 'prefers recorded per-protocol history over the last-error fallback' do
@@ -204,6 +215,63 @@ describe 'Oxidized::API::WebApp /node/show credentials and failures' do
       get '/node/show/sw5'
 
       _(last_response.body).must_include 'No recorded failures.'
+    end
+
+    it 'falls back to the last job status when even the error was cleared (e.g. after a reload)' do
+      last = FailLastJob.new(nil, Time.utc(2026, 8, 19, 11, 43, 35), :no_connection, 40)
+      node = FailingNodeDouble.new('sw5', {}, [], '', '', last, [CredInput::SSH])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5'
+
+      body = last_response.body
+      _(body).wont_include 'No recorded failures.'
+      _(failures_table(body)).must_include 'last backup attempt failed (no_connection)'
+    end
+
+    it 'does not synthesize an entry when the last job succeeded' do
+      last = FailLastJob.new(nil, Time.utc(2026, 8, 19, 11, 43, 35), :success, 5)
+      node = FailingNodeDouble.new('sw5', {}, [], '', '', last, [CredInput::SSH])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5'
+
+      _(last_response.body).must_include 'No recorded failures.'
+    end
+  end
+
+  describe 'connection ports' do
+    it 'lists the resolved port for each configured input protocol' do
+      node = FailingNodeDouble.new('sw5', { username: 'admin', password: 'p' }, [],
+                                   '', '', nil, [CredInput::SSH, CredInput::Telnet])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5'
+
+      body = last_response.body
+      _(body).must_include 'Ports'
+      _(body).must_include 'SSH:22'
+      _(body).must_include 'Telnet:23'
+    end
+
+    it 'shows the protocol without a port for methods that have no simple port var' do
+      node = FailingNodeDouble.new('sw5', {}, [], '', '', nil, [CredInput::Http])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5.json'
+
+      data = JSON.parse(last_response.body)
+      _(data['ports']).must_equal [{ 'protocol' => 'Http', 'port' => nil }]
+    end
+
+    it 'exposes ports in the JSON representation' do
+      node = FailingNodeDouble.new('sw5', {}, [], '', '', nil, [CredInput::SSH])
+      @nodes.stubs(:to_a).returns([node])
+
+      get '/node/show/sw5.json'
+
+      data = JSON.parse(last_response.body)
+      _(data['ports']).must_equal [{ 'protocol' => 'SSH', 'port' => 22 }]
     end
   end
 

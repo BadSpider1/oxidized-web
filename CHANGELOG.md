@@ -6,8 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Show the resolved host credentials (username and password) and a history of
-  the last failed backup attempts on a node's detail page (`/node/show/<node>`).
+- Show the resolved host credentials (username and password), the port used for
+  each configured connection method (SSH, Telnet, …), and a history of the last
+  failed backup attempts on a node's detail page (`/node/show/<node>`).
   Failures are recorded per connection method, so a host that fails SSH and then
   Telnet shows one entry for each, with the timestamp, protocol, error type and
   message; a host that is already failing falls back to the last error the core

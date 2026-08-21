@@ -22,7 +22,7 @@
         Host credentials
       .card-body
         - if @hide_credentials
-          %p.text-body-secondary.mb-0
+          %p.text-body-secondary
             Credentials display is disabled by the
             %code hide_credentials
             option.
@@ -44,6 +44,17 @@
                 %button.btn.btn-sm.btn-outline-secondary.ms-2#togglePassword{type: 'button'}
                   %i.bi.bi-eye-fill
                   Show
+        -# Ports the node uses per connection method (see webapp.rb #node_ports)
+        - if @ports && !@ports.empty?
+          %dl.row.mb-0.mt-3
+            %dt.col-sm-2 Ports
+            %dd.col-sm-10
+              - @ports.each do |mapping|
+                %span.badge.text-bg-secondary.me-1.font-monospace
+                  - if mapping[:port]
+                    = "#{mapping[:protocol]}:#{mapping[:port]}"
+                  - else
+                    = mapping[:protocol]
 
     -# Per-connection-method failure history (see NodeFailureHistory)
     .card.mb-3

@@ -9,12 +9,14 @@ module FakeProto
 end
 
 # Minimal stand-in for Oxidized::Node exposing only what the module wraps: a
-# #run_input that (like the core) sets err_type/err_reason and returns false on
-# a failed attempt, true on success.
+# #name, and a #run_input that (like the core) sets err_type/err_reason and
+# returns false on a failed attempt, true on success.
 class FakeFailNode
   attr_accessor :err_type, :err_reason
+  attr_reader :name
 
-  def initialize
+  def initialize(name = 'fake-node')
+    @name = name
     @program = []
   end
 
@@ -41,28 +43,13 @@ FakeFailNode.prepend(Oxidized::API::NodeFailureHistory)
 
 describe Oxidized::API::NodeFailureHistory do
   after do
-    # reset the global retention size so tests do not leak into each other
+    # keep tests isolated from one another
+    Oxidized::API::NodeFailureHistory.reset_store!
     Oxidized::API::NodeFailureHistory.instance_variable_set(:@max, nil)
   end
 
   it 'is prepended onto the real Oxidized::Node' do
     _(Oxidized::Node.include?(Oxidized::API::NodeFailureHistory)).must_equal true
-  end
-
-  it 'records failures even when the node was constructed before the module was prepended' do
-    # Regression: the Oxidized core builds every Node (Nodes.new) before it
-    # requires oxidized-web and prepends this module, so the poller's nodes
-    # never had a prepended #initialize run. Storage must be created lazily.
-    node = FakeFailNode.new
-    _(node.instance_variable_get(:@failure_history_mutex)).must_be_nil
-
-    node.program([{ ok: false, type: 'Errno::ECONNREFUSED', reason: 'Connection refused' }])
-    node.run_input(FakeProto::SSH.new)
-
-    history = node.failure_history
-    _(history.length).must_equal 1
-    _(history[0][:input]).must_equal 'SSH'
-    _(history[0][:err_type]).must_equal 'Errno::ECONNREFUSED'
   end
 
   it 'records one entry per failed connection method, tagged with the protocol' do
@@ -86,6 +73,18 @@ describe Oxidized::API::NodeFailureHistory do
     _(history[1][:input]).must_equal 'Telnet'
     _(history[1][:err_type]).must_equal 'Errno::ECONNREFUSED'
     _(history[1][:err_reason]).must_equal 'Connection refused'
+  end
+
+  it 'preserves history across node-object replacement (reload) via the name-keyed registry' do
+    # The core rebuilds every Node from scratch on a reload, so storage must not
+    # live on the instance. A new object with the same name sees prior history.
+    first = FakeFailNode.new('sw-x')
+    first.program([{ ok: false, type: 'Errno::ECONNREFUSED', reason: 'Connection refused' }])
+    first.run_input(FakeProto::SSH.new)
+
+    rebuilt = FakeFailNode.new('sw-x')
+    _(rebuilt.failure_history.length).must_equal 1
+    _(rebuilt.failure_history[0][:err_type]).must_equal 'Errno::ECONNREFUSED'
   end
 
   it 'does not attribute a previous input\'s error to an input that set none' do
@@ -129,7 +128,7 @@ describe Oxidized::API::NodeFailureHistory do
     _(history.map { |h| h[:err_type] }).must_equal %w[Err2 Err3 Err4]
   end
 
-  it 'returns a snapshot that cannot mutate the internal history' do
+  it 'returns a snapshot that cannot mutate the stored history' do
     node = FakeFailNode.new
     node.program([{ ok: false, type: 'X', reason: 'y' }])
     node.run_input(FakeProto::SSH.new)
@@ -138,6 +137,19 @@ describe Oxidized::API::NodeFailureHistory do
     snapshot << { input: 'injected' }
 
     _(node.failure_history.length).must_equal 1
+  end
+
+  it 'keeps each node\'s history separate (keyed by name)' do
+    a = FakeFailNode.new('node-a')
+    b = FakeFailNode.new('node-b')
+    a.program([{ ok: false, type: 'ErrA', reason: 'a' }])
+    b.program([{ ok: false, type: 'ErrB', reason: 'b' }])
+
+    a.run_input(FakeProto::SSH.new)
+    b.run_input(FakeProto::Telnet.new)
+
+    _(a.failure_history.map { |h| h[:err_type] }).must_equal %w[ErrA]
+    _(b.failure_history.map { |h| h[:err_type] }).must_equal %w[ErrB]
   end
 
   describe '.max=' do
